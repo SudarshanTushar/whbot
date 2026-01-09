@@ -1,0 +1,8 @@
+flask
+requests
+google-generativeai
+python-dotenv
+motor
+pymongo
+certifi
+gTTS
