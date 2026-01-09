@@ -1,11 +1,12 @@
 import certifi
 import os
 from motor.motor_asyncio import AsyncIOMotorClient
+from config import MONGO_URI
 
-# Load Mongo URI from Config or Environment
-MONGO_URI = os.environ.get("MONGO_URI")
+# Bypass SSL Verification (Critical for Heroku)
+if not MONGO_URI:
+    raise ValueError("❌ MONGO_URI is missing in Environment Variables!")
 
-# Bypass SSL Verification to prevent Heroku connection errors
 client = AsyncIOMotorClient(
     MONGO_URI,
     tls=True,
