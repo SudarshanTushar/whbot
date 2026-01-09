@@ -3,21 +3,19 @@ import requests
 import json
 import base64
 import io
-import google.generativeai as genai
+import os
+from google import genai
+from google.genai import types
 from gtts import gTTS
 from config import GEMINI_API_KEY, WHATSAPP_TOKEN, PHONE_NUMBER_ID
 from db import get_history, add_history, clear_history
 
-# --- AI CONFIGURATION ---
-genai.configure(api_key=GEMINI_API_KEY)
+# --- NEW AI CLIENT ---
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- ROBUST MODEL LIST ---
 MODEL_LIST = [
-    "gemini-flash-latest",
-    "gemini-2.5-flash-lite",
-    "gemini-flash-lite-latest",
-    "gemini-2.5-flash-preview-09-2025",
-    "gemini-2.5-flash-lite-preview-09-2025",
+    "gemini-2.0-flash-exp",
     "gemini-1.5-flash",
     "gemini-1.5-pro"
 ]
@@ -29,20 +27,62 @@ RULES:
 3. Be realistic and practical.
 4. If asked for a Roadmap, generate Mermaid.js code."""
 
+# --- HELPER: HISTORY CONVERTER ---
+def format_history_for_new_sdk(db_history, new_user_text):
+    """
+    Converts old DB format {'role': 'user', 'parts': ['text']} 
+    to New SDK format {'role': 'user', 'parts': [{'text': 'text'}]}
+    """
+    formatted_contents = []
+    
+    # 1. Add System Instruction first (Best practice in new SDK)
+    formatted_contents.append(
+        types.Content(role="user", parts=[types.Part.from_text(text=SYSTEM_PROMPT)])
+    )
+    
+    # 2. Add Past History
+    for entry in db_history:
+        role = entry.get("role")
+        # Ensure 'model' role is strictly used (some old DBs use 'assistant')
+        if role == "model": 
+            role = "model"
+        else:
+            role = "user"
+            
+        parts_text = entry.get("parts", [])
+        if isinstance(parts_text, list):
+            # Join list of strings into one string if needed, or take first
+            text_content = " ".join(parts_text) if parts_text else ""
+        else:
+            text_content = str(parts_text)
+            
+        formatted_contents.append(
+            types.Content(role=role, parts=[types.Part.from_text(text=text_content)])
+        )
+
+    # 3. Add Current User Query
+    formatted_contents.append(
+        types.Content(role="user", parts=[types.Part.from_text(text=new_user_text)])
+    )
+    
+    return formatted_contents
+
 # --- FALLBACK ENGINE ---
-async def generate_with_fallback(history, user_prompt):
-    """Tries models one by one until success"""
+def generate_with_fallback(formatted_contents):
+    """Tries models one by one using the new SDK"""
     last_error = None
     
     for model_name in MODEL_LIST:
         try:
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=SYSTEM_PROMPT
+            # New SDK Generation Call
+            response = client.models.generate_content(
+                model=model_name,
+                contents=formatted_contents,
+                config=types.GenerateContentConfig(
+                    temperature=0.7
+                )
             )
-            chat_session = model.start_chat(history=history)
-            response = await chat_session.send_message_async(user_prompt)
-            return response
+            return response.text
         except Exception as e:
             logging.warning(f"⚠️ Model '{model_name}' failed. Switching... Error: {e}")
             last_error = e
@@ -79,7 +119,6 @@ def send_whatsapp_image(to_number, image_url, caption):
     }
     requests.post(url, headers=headers, json=data)
 
-# --- GRAPHICS ENGINE ---
 def generate_graph_url(mermaid_code):
     try:
         graph_code = mermaid_code.replace("```mermaid", "").replace("```", "").strip()
@@ -121,27 +160,27 @@ async def process_whatsapp_event(body):
                 return
 
         elif msg_type == 'audio':
-            # Audio handling requires Media download URL (Advanced)
-            # For MVP, we treat it as text request prompt
-            user_prompt = "User sent an audio. Reply: 'I heard you, but I can only read text on WhatsApp right now.'"
+            user_prompt = "User sent audio. Reply: 'I heard you, but reply in text.'"
             user_display = "[Audio Message]"
         
         else:
             return 
 
-        # 3. GENERATE (With Fallback)
+        # 3. PREPARE CONTENT (CONVERT TO NEW FORMAT)
+        formatted_contents = format_history_for_new_sdk(past_history, user_prompt)
+
+        # 4. GENERATE (With Fallback)
         try:
-            response = await generate_with_fallback(past_history, user_prompt)
-            ai_text = response.text
+            ai_text = generate_with_fallback(formatted_contents)
         except Exception as e:
-            send_whatsapp_message(sender_id, "⚠️ Brain Overload: Please wait 1 minute.")
+            send_whatsapp_message(sender_id, "⚠️ Traffic Jam: Please wait 1 minute.")
             logging.error(f"All Models Failed: {e}")
             return
 
-        # 4. SAVE TO DB
+        # 5. SAVE TO DB (Keep old simple format for DB storage)
         await add_history(sender_id, user_display, ai_text)
 
-        # 5. CHECK VISUALS
+        # 6. CHECK VISUALS
         if "```mermaid" in ai_text:
             try:
                 parts = ai_text.split("```mermaid")
@@ -153,7 +192,7 @@ async def process_whatsapp_event(body):
                 pass
             ai_text = ai_text.replace("```mermaid", "").replace("graph TD", "").replace("```", "")
 
-        # 6. REPLY
+        # 7. REPLY
         send_whatsapp_message(sender_id, ai_text)
 
     except Exception as e:
