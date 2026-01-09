@@ -11,17 +11,46 @@ from db import get_history, add_history, clear_history
 # --- AI CONFIGURATION ---
 genai.configure(api_key=GEMINI_API_KEY)
 
+# --- ROBUST MODEL LIST ---
+MODEL_LIST = [
+    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash-preview-09-2025",
+    "gemini-2.5-flash-lite-preview-09-2025",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro"
+]
+
 SYSTEM_PROMPT = """You are 'Pathsetu', an AI Career GPS.
 RULES:
 1. Reply in the same language (English/Hindi/Marathi/Telugu).
-2. Keep answers SHORT (WhatsApp users hate long texts).
+2. Keep answers SHORT (max 50 words) for WhatsApp.
 3. Be realistic and practical.
 4. If asked for a Roadmap, generate Mermaid.js code."""
 
-# Using the Fallback Logic (Simplified for brevity)
-model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=SYSTEM_PROMPT)
+# --- FALLBACK ENGINE ---
+async def generate_with_fallback(history, user_prompt):
+    """Tries models one by one until success"""
+    last_error = None
+    
+    for model_name in MODEL_LIST:
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=SYSTEM_PROMPT
+            )
+            chat_session = model.start_chat(history=history)
+            response = await chat_session.send_message_async(user_prompt)
+            return response
+        except Exception as e:
+            logging.warning(f"⚠️ Model '{model_name}' failed. Switching... Error: {e}")
+            last_error = e
+            continue
+            
+    raise last_error
 
-# --- WHATSAPP API HELPERS ---
+# --- WHATSAPP API SENDERS ---
 def send_whatsapp_message(to_number, text):
     url = f"https://graph.facebook.com/v17.0/{PHONE_NUMBER_ID}/messages"
     headers = {
@@ -60,67 +89,72 @@ def generate_graph_url(mermaid_code):
     except:
         return None
 
-# --- MAIN LOGIC ---
+# --- MAIN EVENT PROCESSOR ---
 async def process_whatsapp_event(body):
-    """Handles incoming WhatsApp messages"""
     try:
         entry = body['entry'][0]
         changes = entry['changes'][0]
         value = changes['value']
         
         if 'messages' not in value:
-            return # Not a message (maybe a status update)
+            return
 
         message = value['messages'][0]
-        sender_id = message['from'] # This is the Phone Number
+        sender_id = message['from']
         
-        # 1. LOAD HISTORY (Using Phone Number as User ID)
+        # 1. LOAD HISTORY
         past_history = await get_history(sender_id)
-        chat_session = model.start_chat(history=past_history)
         
         user_prompt = ""
         user_display = ""
 
-        # 2. DETERMINE INPUT TYPE
+        # 2. HANDLE INPUT
         msg_type = message['type']
         
         if msg_type == 'text':
             user_prompt = message['text']['body']
             user_display = user_prompt
             
-            # Handle /start command logic manually
-            if user_prompt.lower() == "/start" or user_prompt.lower() == "hi":
+            if user_prompt.lower() in ["/start", "hi", "hello"]:
                 await clear_history(sender_id)
-                send_whatsapp_message(sender_id, "Namaste! 🙏 I am Pathsetu for WhatsApp.\nAsk me about careers!")
+                send_whatsapp_message(sender_id, "Namaste! 🙏 Pathsetu here.\nAsk me about careers!")
                 return
 
         elif msg_type == 'audio':
-            # Handling Voice in WhatsApp is complex (requires downloading media URL)
-            # For this MVP, we will treat it as a placeholder or need extra code to download
-            user_prompt = "User sent an audio file. Please reply: 'I received your audio.'"
+            # Audio handling requires Media download URL (Advanced)
+            # For MVP, we treat it as text request prompt
+            user_prompt = "User sent an audio. Reply: 'I heard you, but I can only read text on WhatsApp right now.'"
             user_display = "[Audio Message]"
         
         else:
-            return # Unsupported type
+            return 
 
-        # 3. AI GENERATION
-        response = await chat_session.send_message_async(user_prompt)
-        ai_text = response.text
-        
+        # 3. GENERATE (With Fallback)
+        try:
+            response = await generate_with_fallback(past_history, user_prompt)
+            ai_text = response.text
+        except Exception as e:
+            send_whatsapp_message(sender_id, "⚠️ Brain Overload: Please wait 1 minute.")
+            logging.error(f"All Models Failed: {e}")
+            return
+
         # 4. SAVE TO DB
         await add_history(sender_id, user_display, ai_text)
 
         # 5. CHECK VISUALS
         if "```mermaid" in ai_text:
-            parts = ai_text.split("```mermaid")
-            graph_code = parts[1].split("```")[0]
-            img_url = generate_graph_url(graph_code)
-            if img_url:
-                send_whatsapp_image(sender_id, img_url, "Your Roadmap 📍")
+            try:
+                parts = ai_text.split("```mermaid")
+                graph_code = parts[1].split("```")[0]
+                img_url = generate_graph_url(graph_code)
+                if img_url:
+                    send_whatsapp_image(sender_id, img_url, "Your Roadmap 📍")
+            except:
+                pass
             ai_text = ai_text.replace("```mermaid", "").replace("graph TD", "").replace("```", "")
 
-        # 6. SEND REPLY
+        # 6. REPLY
         send_whatsapp_message(sender_id, ai_text)
 
     except Exception as e:
-        logging.error(f"WhatsApp Error: {e}")
+        logging.error(f"WhatsApp Logic Error: {e}")
