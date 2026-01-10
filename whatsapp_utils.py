@@ -74,7 +74,7 @@ def format_history_for_new_sdk(db_history, new_user_text):
 
 
 def ensure_client_available(sender_id=None):
-    """Returns True if the Gemini client is available, False otherwise. Optionally notifies sender_id when unavailable."""
+    """Returns True if the Gemini client is available, False otherwise, and notifies sender_id when provided."""
     if client:
         return True
     if sender_id:
@@ -190,6 +190,7 @@ async def process_whatsapp_event(body):
         try:
             ai_text = generate_with_fallback(formatted_contents)
             if ai_text is None:
+                send_whatsapp_message(sender_id, "⚠️ Unable to generate a reply right now.")
                 return
         except Exception as e:
             send_whatsapp_message(sender_id, "⚠️ Traffic Jam: Please wait 1 minute.")
