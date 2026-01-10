@@ -11,7 +11,11 @@ from config import GEMINI_API_KEY, WHATSAPP_TOKEN, PHONE_NUMBER_ID
 from db import get_history, add_history, clear_history
 
 # --- NEW AI CLIENT ---
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = None
+if GEMINI_API_KEY:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    logging.error("GEMINI_API_KEY is missing; AI responses are disabled until it is set.")
 
 # --- ROBUST MODEL LIST ---
 MODEL_LIST = [
@@ -70,6 +74,8 @@ def format_history_for_new_sdk(db_history, new_user_text):
 # --- FALLBACK ENGINE ---
 def generate_with_fallback(formatted_contents):
     """Tries models one by one using the new SDK"""
+    if not client:
+        raise RuntimeError("GEMINI_API_KEY is missing")
     last_error = None
     
     for model_name in MODEL_LIST:
@@ -168,6 +174,10 @@ async def process_whatsapp_event(body):
 
         # 3. PREPARE CONTENT (CONVERT TO NEW FORMAT)
         formatted_contents = format_history_for_new_sdk(past_history, user_prompt)
+
+        if not client:
+            send_whatsapp_message(sender_id, "Service unavailable: missing AI key.")
+            return
 
         # 4. GENERATE (With Fallback)
         try:
