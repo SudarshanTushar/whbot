@@ -3,7 +3,7 @@ import os
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import MONGO_URI
 
-# Bypass SSL Verification (Critical for Heroku)
+# Mongo client/collection are initialised lazily only when MONGO_URI is provided.
 client = None
 collection = None
 

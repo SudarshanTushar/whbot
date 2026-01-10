@@ -74,6 +74,7 @@ def format_history_for_new_sdk(db_history, new_user_text):
 
 
 def ensure_client_available(sender_id=None):
+    """Ensure the Gemini client is configured; optionally notifies the sender when missing."""
     if client:
         return True
     if sender_id:
@@ -84,7 +85,7 @@ def ensure_client_available(sender_id=None):
 def generate_with_fallback(formatted_contents):
     """Tries models one by one using the new SDK"""
     if not ensure_client_available():
-        raise RuntimeError(MISSING_KEY_MESSAGE)
+        return None
     last_error = None
     
     for model_name in MODEL_LIST:
@@ -190,6 +191,8 @@ async def process_whatsapp_event(body):
         # 4. GENERATE (With Fallback)
         try:
             ai_text = generate_with_fallback(formatted_contents)
+            if ai_text is None:
+                return
         except Exception as e:
             send_whatsapp_message(sender_id, "⚠️ Traffic Jam: Please wait 1 minute.")
             logging.error(f"All Models Failed: {e}")
