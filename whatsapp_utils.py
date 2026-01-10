@@ -192,6 +192,7 @@ async def process_whatsapp_event(body):
         try:
             ai_text = generate_with_fallback(formatted_contents)
             if ai_text is None:
+                send_whatsapp_message(sender_id, MISSING_KEY_MESSAGE)
                 return
         except Exception as e:
             send_whatsapp_message(sender_id, "⚠️ Traffic Jam: Please wait 1 minute.")
