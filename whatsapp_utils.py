@@ -74,7 +74,7 @@ def format_history_for_new_sdk(db_history, new_user_text):
 
 
 def ensure_client_available(sender_id=None):
-    """Ensure the Gemini client is configured; returns True when available, otherwise False (and optionally notifies the sender)."""
+    """Returns True if the Gemini client is available, False otherwise. Optionally notifies sender_id when unavailable."""
     if client:
         return True
     if sender_id:
@@ -83,9 +83,7 @@ def ensure_client_available(sender_id=None):
 
 # --- FALLBACK ENGINE ---
 def generate_with_fallback(formatted_contents):
-    """Tries models one by one using the new SDK. Returns the AI text or None if the client is unavailable."""
-    if not ensure_client_available():
-        return None
+    """Tries models one by one using the new SDK. Caller should ensure the client is available first."""
     last_error = None
     
     for model_name in MODEL_LIST:
