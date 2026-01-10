@@ -11,11 +11,12 @@ from config import GEMINI_API_KEY, WHATSAPP_TOKEN, PHONE_NUMBER_ID
 from db import get_history, add_history, clear_history
 
 # --- NEW AI CLIENT ---
+MISSING_KEY_MESSAGE = "GEMINI_API_KEY is missing; AI responses are disabled."
 client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    logging.error("GEMINI_API_KEY is missing; AI responses are disabled until it is set.")
+    logging.error(MISSING_KEY_MESSAGE)
 
 # --- ROBUST MODEL LIST ---
 MODEL_LIST = [
@@ -71,11 +72,19 @@ def format_history_for_new_sdk(db_history, new_user_text):
     
     return formatted_contents
 
+
+def ensure_client_available(sender_id=None):
+    if client:
+        return True
+    if sender_id:
+        send_whatsapp_message(sender_id, MISSING_KEY_MESSAGE)
+    return False
+
 # --- FALLBACK ENGINE ---
 def generate_with_fallback(formatted_contents):
     """Tries models one by one using the new SDK"""
-    if not client:
-        raise RuntimeError("GEMINI_API_KEY is missing")
+    if not ensure_client_available():
+        raise RuntimeError(MISSING_KEY_MESSAGE)
     last_error = None
     
     for model_name in MODEL_LIST:
@@ -175,8 +184,7 @@ async def process_whatsapp_event(body):
         # 3. PREPARE CONTENT (CONVERT TO NEW FORMAT)
         formatted_contents = format_history_for_new_sdk(past_history, user_prompt)
 
-        if not client:
-            send_whatsapp_message(sender_id, "Service unavailable: missing AI key.")
+        if not ensure_client_available(sender_id):
             return
 
         # 4. GENERATE (With Fallback)
